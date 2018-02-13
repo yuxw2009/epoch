@@ -104,6 +104,14 @@ jobs:
             PID_LIST+=" $pid"
             time ./test.sh 10000000 & pid=$!
             PID_LIST+=" $pid"
+            time ./test.sh 10000000 & pid=$!
+            PID_LIST+=" $pid"
+            time ./test.sh 10000000 & pid=$!
+            PID_LIST+=" $pid"
+            time ./test.sh 10000000 & pid=$!
+            PID_LIST+=" $pid"
+            time ./test.sh 10000000 & pid=$!
+            PID_LIST+=" $pid"
             wait $PID_LIST
 
   build:
