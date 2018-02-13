@@ -2,6 +2,7 @@ version: 2
 
 references:
   container_config: &container_config
+    resource_class: xlarge
     docker:
       - image: aetrnty/builder
         user: builder
@@ -82,7 +83,6 @@ references:
 jobs:
   paratest:
     <<: *container_config
-    resource_class: xlarge
     steps:
       - checkout
       - run:
