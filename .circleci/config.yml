@@ -121,7 +121,9 @@ jobs:
       - *restore_rebar_cache
       - run:
           name: Build
-          command: ./rebar3 as test do release
+          command: |
+            export MAKEFLAGS='-j$(nproc)'
+            ./rebar3 as test do release
       - save_cache:
           key: *build_cache_key
           paths:
@@ -143,6 +145,7 @@ jobs:
       - run:
           name: Test
           command: |
+            export MAKEFLAGS='-j$(nproc)'
             epmd -daemon
             make test
       - store_test_results:
@@ -159,6 +162,7 @@ jobs:
       - run:
           name: Test
           command: |
+            export MAKEFLAGS='-j$(nproc)'
             epmd -daemon
             make eunit
 
