@@ -80,6 +80,19 @@ references:
             deploy.yml
 
 jobs:
+  paratest:
+    <<: *container_config
+    steps:
+      - checkout
+      - run:
+          name: Paratest
+          command: |
+            time ./test.sh 10000000 & pid=$!
+            PID_LIST+=" $pid"
+            time ./test.sh 10000000 & pid=$!
+            PID_LIST+=" $pid"
+            wait $PID_LIST
+
   build:
     <<: *container_config
     steps:
@@ -212,6 +225,9 @@ workflows:
   version: 2
   build_test_deploy:
     jobs:
+      - paratest:
+          requires: ~
+
       - build:
           requires: ~
           filters:
