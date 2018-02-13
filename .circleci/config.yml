@@ -82,6 +82,7 @@ references:
 jobs:
   paratest:
     <<: *container_config
+    resource_class: xlarge
     steps:
       - checkout
       - run:
