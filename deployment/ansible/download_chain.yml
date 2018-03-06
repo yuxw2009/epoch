@@ -1,0 +1,37 @@
+---
+# Playbook used to download latest blockchain data from last host in the playbook hosts
+
+- name: Archive and download epoch blockchain
+  hosts: "{{ ansible_play_hosts | last }}"
+  remote_user: epoch
+
+  vars:
+    project_root: "{{ ansible_env.HOME }}/node"
+    download_dir: /tmp/blockchain
+
+  tasks:
+    - name: Stat epoch.yaml
+      stat:
+        path: "{{ project_root }}/epoch.yaml"
+      register: config_file
+
+    - name: Read epoch.yaml contents
+      command: "cat {{ project_root }}/epoch.yaml"
+      register: cat_output
+      when: config_file.stat.exists
+
+    - name: Parse YAML configuration
+      set_fact:
+        epoch_vars: "{{ cat_output.stdout | from_yaml }}"
+      when: config_file.stat.exists
+
+    - name: Archive blockchain
+      archive:
+        path: "{{ project_root }}/{{ epoch_vars.chain.db_path }}/"
+        dest: "{{ ansible_env.HOME }}/{{ epoch_vars.chain.db_path }}.tgz"
+      when: config_file.stat.exists
+
+    - name: Download the blockchain archive
+      fetch:
+        src: "{{ ansible_env.HOME }}/{{ epoch_vars.chain.db_path }}.tgz"
+        dest: "{{ download_dir }}"

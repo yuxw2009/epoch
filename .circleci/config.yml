@@ -259,6 +259,23 @@ jobs:
           path: _build/dev3/rel/epoch/log
           destination: node3/
 
+  uat_chain_snapshot:
+    <<: *container_config
+    steps:
+      - checkout
+      - run:
+          name: Install PIP Requirements
+          command: |
+            pip install --user -r deployment/ansible/pip-requirements.txt
+      - run:
+          name: Snapshot of UAT blockchain
+          command: |
+            cd deployment/ansible
+            ansible-playbook --limit="epoch:&uat" --extra-vars "download_dir=/tmp/chain_snapshots" \
+              download_chain.yml
+      - store_artifacts:
+          path: /tmp/chain_snapshots
+
   deploy_integration:
     <<: *container_config
     environment:
@@ -440,7 +457,7 @@ workflows:
             tags:
               only: /^v.*$/
 
-  nightly:
+  user_acceptance_tests:
     triggers:
       - schedule:
           cron: "0 0 * * *"
@@ -450,3 +467,15 @@ workflows:
                 - master
     jobs:
       - uat_tests
+
+  chain_snapshots:
+    triggers:
+      - schedule:
+          # run Sun, Tue, Thu at midnight UTC
+          cron: "0 0 * * 0,2,4"
+          filters:
+            branches:
+              only:
+                - master
+    jobs:
+      - uat_chain_snapshot
