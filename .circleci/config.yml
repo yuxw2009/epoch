@@ -288,7 +288,8 @@ jobs:
           name: Snapshot of UAT blockchain
           command: |
             cd deployment/ansible
-            ansible-playbook --limit="epoch:&uat" --extra-vars "download_dir=/tmp/chain_snapshots" \
+            ansible-playbook --limit="epoch:&uat" \
+              --extra-vars "download_dir=/tmp/chain_snapshots archive_suffix=db_backup_$(date +%s)" \
               download_chain.yml
       - store_artifacts:
           path: /tmp/chain_snapshots
@@ -348,6 +349,8 @@ workflows:
                 - env/dev2
             tags:
               only: /^v.*$/
+
+      - uat_chain_snapshot: ~
 
       - deploy_api_docs:
           requires:

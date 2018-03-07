@@ -1,5 +1,8 @@
 ---
 # Playbook used to download latest blockchain data from last host in the playbook hosts
+#
+# By default the archive destination is overwritten if already exists,
+# if archive overwrite is not intended the caller is responsible for setting correct (e.g. unique) "archive_suffix"
 
 - name: Archive and download epoch blockchain
   hosts: "{{ ansible_play_hosts | last }}"
@@ -8,6 +11,7 @@
   vars:
     project_root: "{{ ansible_env.HOME }}/node"
     download_dir: /tmp/blockchain
+    archive_suffix: backup
 
   tasks:
     - name: Stat epoch.yaml
@@ -28,10 +32,10 @@
     - name: Archive blockchain
       archive:
         path: "{{ project_root }}/{{ epoch_vars.chain.db_path }}/"
-        dest: "{{ ansible_env.HOME }}/{{ epoch_vars.chain.db_path }}.tgz"
+        dest: "{{ ansible_env.HOME }}/{{ ansible_hostname }}_{{ archive_suffix }}.tgz"
       when: config_file.stat.exists
 
     - name: Download the blockchain archive
       fetch:
-        src: "{{ ansible_env.HOME }}/{{ epoch_vars.chain.db_path }}.tgz"
+        src: "{{ ansible_env.HOME }}/{{ ansible_hostname }}_{{ archive_suffix }}.tgz"
         dest: "{{ download_dir }}"
