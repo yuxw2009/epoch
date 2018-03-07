@@ -117,10 +117,7 @@ ctx2pid(Props) when is_list(Props) ->
     end.
 
 start() ->
-    case docker_utils:start() of
-        ok -> gen_server:start(?MODULE, [], []);
-        Error -> Error
-    end.
+    gen_server:start(?MODULE, [], []).
 
 stop(Pid) ->
     gen_server:stop(Pid).
@@ -129,7 +126,10 @@ call(Pid, Msg) ->
     gen_server:call(Pid, Msg).
 
 setup() ->
-    start().
+    case docker_utils:start() of
+        ok -> start();
+        Error -> Error
+    end.
 
 cleanup(Ctx) ->
     Pid = ctx2pid(Ctx),
