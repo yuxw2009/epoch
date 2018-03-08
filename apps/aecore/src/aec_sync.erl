@@ -231,7 +231,7 @@ handle_cast({schedule_ping, Uri}, State) ->
 handle_cast({delete_from_pool, Uri}, State) ->
     %% This Uri misbehaved, even if we got a new Ping inbetween asking for deletion and
     %% actual deletion, we remove it. A new ping will arrive in the future.
-    {noreply, ok, State#state{sync_pool = lists:keydelete(Uri, #sync_peer.uri, State#state.sync_pool)}};
+    {noreply, State#state{sync_pool = lists:keydelete(Uri, #sync_peer.uri, State#state.sync_pool)}};
 handle_cast(_, State) ->
     {noreply, State}.
 
