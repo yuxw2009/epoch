@@ -9,10 +9,6 @@
 
 %=== EXPORTS ===================================================================
 
-%% EUnit API exports
--export([eunit_setup/0]).
--export([eunit_teardown/1]).
-
 %% Common Test API exports
 -export([ct_setup/1]).
 -export([ct_cleanup/1]).
@@ -35,28 +31,15 @@
 -define(CALL_TAG, ?MODULE).
 -define(CT_CONF_KEY, node_manager).
 
-
-%=== EUNIT API FUNCTIONS =======================================================
-
-eunit_setup() ->
-    case setup() of
-        {ok, Pid} -> Pid;
-        {error, Reason} ->
-            erlang:error({system_test_setup_failed, [{reason, Reason}]})
-    end.
-
-eunit_teardown(Ctx) ->
-    case cleanup(Ctx) of
-        ok -> ok;
-        {error, Reason} ->
-            erlang:error({system_test_cleanup_failed, [{reason, Reason}]})
-    end.
+-define(TEST_CTX_FIRST_LOCAL_PORT, 3001).
 
 
 %=== COMMON TEST API FUNCTIONS =================================================
 
 ct_setup(Config) ->
-    case setup() of
+    {data_dir, DataDir} = proplists:lookup(data_dir, Config),
+    {priv_dir, PrivDir} = proplists:lookup(priv_dir, Config),
+    case setup(DataDir, PrivDir) of
         {ok, Pid} -> [{?CT_CONF_KEY, Pid} | Config];
         {error, Reason} ->
             erlang:error({system_test_setup_failed, [{reason, Reason}]})
@@ -87,8 +70,8 @@ assert_synchronized(_NodeNames, _Ctx) ->
 
 %=== BEHAVIOUR GEN_SERVER CALLBACK FUNCTIONS ===================================
 
-init([]) ->
-    {ok, #{}}.
+init([DataDir, TempDir]) ->
+    mgr_setup(DataDir, TempDir).
 
 handle_call({setup_nodes, NodeSpecs}, _From, State) ->
     call_reply(mgr_setup_nodes(NodeSpecs, State), State);
@@ -108,6 +91,10 @@ handle_cast(_Msg, State) ->
 
 %=== INTERNAL FUNCTIONS ========================================================
 
+uid() ->
+    iolist_to_binary([[io_lib:format("~2.16.0B",[X])
+                       || <<X:8>> <= crypto:strong_rand_bytes(16) ]]).
+
 ctx2pid(Pid) when is_pid(Pid) -> Pid;
 ctx2pid(Props) when is_list(Props) ->
     case proplists:lookup(?CT_CONF_KEY, Props) of
@@ -116,8 +103,8 @@ ctx2pid(Props) when is_list(Props) ->
             erlang:error({system_test_not_setup, []})
     end.
 
-start() ->
-    gen_server:start(?MODULE, [], []).
+start(DataDir, TempDir) ->
+    gen_server:start(?MODULE, [DataDir, TempDir], []).
 
 stop(Pid) ->
     gen_server:stop(Pid).
@@ -125,9 +112,9 @@ stop(Pid) ->
 call(Pid, Msg) ->
     gen_server:call(Pid, Msg).
 
-setup() ->
+setup(DataDir, TempDir) ->
     case docker_utils:start() of
-        ok -> start();
+        ok -> start(DataDir, TempDir);
         Error -> Error
     end.
 
@@ -149,11 +136,36 @@ call_reply(Error, OldState) ->
 
 %--- NODE MANAGER PROCESS FUNCTION ---------------------------------------------
 
-mgr_setup_nodes(_NodeSpecs, State) ->
+mgr_setup(DataDir, TempDir) ->
+    TestId = uid(),
+    TestCtx = #{local_port => ?TEST_CTX_FIRST_LOCAL_PORT,
+                test_id => TestId,
+                temp_dir => TempDir,
+                data_dir => DataDir},
+    {ok, #{ctx => TestCtx, nodes => #{}}}.
+
+mgr_cleanup(State) ->
     {ok, State}.
+
+mgr_setup_nodes(NodeSpecs, State) ->
+    #{ctx := TestCtx, nodes := Nodes} = State,
+    %% TODO: Add some validation of the specs
+    %%  e.g. name clash, required keys...
+    {PrepNodes, TestCtx2} = lists:foldl(
+        fun(#{name := Name} = Spec, {Acc, Ctx}) ->
+            {ok, NodeState, NewCtx} =
+                system_test_backend:prepare_node(Spec, Ctx),
+            {Acc#{Name => NodeState}, NewCtx}
+        end, {#{}, TestCtx}, NodeSpecs),
+    AllNodes = maps:merge(Nodes, PrepNodes),
+    {Nodes2, TestCtx3} = maps:fold(
+        fun(Name, NodeState, {Acc, Ctx}) ->
+            {ok, NewNodeState, NewCtx} =
+                system_test_backend:setup_node(NodeState, AllNodes, Ctx),
+            {Acc#{Name => NewNodeState}, NewCtx}
+        end, {Nodes, TestCtx2}, PrepNodes),
+    {ok, State#{ctx := TestCtx3, nodes := Nodes2}}.
 
 mgr_start_node(_NodeName, State) ->
     {ok, State}.
 
-mgr_cleanup(State) ->
-    {ok, State}.
