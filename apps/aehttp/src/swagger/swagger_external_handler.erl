@@ -120,6 +120,14 @@ allowed_methods(
 allowed_methods(
     Req,
     State = #state{
+        operation_id = 'GetHeadersByHash'
+    }
+) ->
+    {[<<"GET">>], Req, State};
+
+allowed_methods(
+    Req,
+    State = #state{
         operation_id = 'GetInfo'
     }
 ) ->
@@ -333,6 +341,7 @@ allowed_methods(Req, State) ->
 
 
 
+
 is_authorized(Req, State) ->
     {true, Req, State}.
 
@@ -425,6 +434,16 @@ valid_content_headers(
     Req0,
     State = #state{
         operation_id = 'GetHeaderByHash'
+    }
+) ->
+    Headers = [],
+    {Result, Req} = validate_headers(Headers, Req0),
+    {Result, Req, State};
+
+valid_content_headers(
+    Req0,
+    State = #state{
+        operation_id = 'GetHeadersByHash'
     }
 ) ->
     Headers = [],

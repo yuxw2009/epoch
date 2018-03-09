@@ -55,6 +55,12 @@ request_params('GetHeaderByHash') ->
         'hash'
     ];
 
+request_params('GetHeadersByHash') ->
+    [
+        'hash',
+        'number'
+    ];
+
 request_params('GetInfo') ->
     [
     ];
@@ -451,6 +457,24 @@ request_param_info('GetHeaderByHash', 'hash') ->
         rules => [
             {type, 'binary'},
             required
+        ]
+    };
+
+request_param_info('GetHeadersByHash', 'hash') ->
+    #{
+        source => qs_val  ,
+        rules => [
+            {type, 'binary'},
+            required
+        ]
+    };
+
+request_param_info('GetHeadersByHash', 'number') ->
+    #{
+        source => qs_val  ,
+        rules => [
+            {type, 'integer'},
+            not_required
         ]
     };
 
@@ -1287,6 +1311,15 @@ validate_response('GetHeaderByHash', 200, Body, ValidatorState) ->
 validate_response('GetHeaderByHash', 400, Body, ValidatorState) ->
     validate_response_body('Error', 'Error', Body, ValidatorState);
 validate_response('GetHeaderByHash', 404, Body, ValidatorState) ->
+    validate_response_body('Error', 'Error', Body, ValidatorState);
+
+validate_response('GetHeadersByHash', 200, Body, ValidatorState) ->
+    validate_response_body('list', 'Header', Body, ValidatorState);
+validate_response('GetHeadersByHash', 400, Body, ValidatorState) ->
+    validate_response_body('Error', 'Error', Body, ValidatorState);
+validate_response('GetHeadersByHash', 401, Body, ValidatorState) ->
+    validate_response_body('Error', 'Error', Body, ValidatorState);
+validate_response('GetHeadersByHash', 404, Body, ValidatorState) ->
     validate_response_body('Error', 'Error', Body, ValidatorState);
 
 validate_response('GetInfo', 200, Body, ValidatorState) ->
