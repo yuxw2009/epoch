@@ -160,14 +160,14 @@ get_header_by_height(Uri, Height) when is_integer(Height) ->
             {error, unexpected_response}
     end.
 
-%% Add API for header later... now use block
 -spec get_n_hashes(http_uri_uri(),  binary(), non_neg_integer()) -> response({integer(), binary()}).
 get_n_hashes(Uri, Hash, N) when is_integer(N) ->
     EncHash = aec_base58c:encode(block_hash, Hash),
     Response = process_request(Uri, 'GetHeadersByHash', [{"hash", EncHash}, {"number", integer_to_list(N)}]),
     case Response of
         {ok, 200, Data} when is_list(Data) ->
-            lists:foldl(fun(Header, Acc) ->
+            %% Keep them in order, oldest block is first!
+            {ok, lists:foldr(fun(Header, Acc) ->
                             case aec_headers:deserialize_from_map(Header) of
                                 {ok, H} ->
                                     {ok, HH} = aec_headers:hash_header(H),
@@ -176,7 +176,7 @@ get_n_hashes(Uri, Hash, N) when is_integer(N) ->
                                     lager:info("Got bad block hash from ~p", [Uri]),
                                     Acc
                             end
-                        end, [], Data);
+                        end, [], Data)};
         {error, _Reason} = Error ->
             Error;
         _ ->
