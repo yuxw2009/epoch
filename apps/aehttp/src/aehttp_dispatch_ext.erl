@@ -101,7 +101,28 @@ handle_request('GetHeaderByHash', Req, _Context) ->
                     lager:debug("Resp = ~p", [pp(Resp)]),
                     {200, [], Resp};
                 error ->
-                    {404, [], #{reason => <<"Block not found">>}}
+                    {404, [], #{reason => <<"Header not found">>}}
+            end
+    end;
+
+handle_request('GetHeadersByHash', Req, _Context) ->
+    case {aec_base58c:safe_decode(block_hash, maps:get('hash', Req)),
+          maps:get('number', Req, 1)} of
+        {{error, _}, _} ->
+            {400, [], #{reason => <<"Invalid hash">>}};
+        {_, N} when not is_integer(N) orelse N < 1 ->
+            {401, [], #{reason => <<"Invalid number">>}};
+        {{ok, Hash}, N} ->
+            case aec_chain:get_n_headers_from_hash(Hash, N) of
+                {ok, Headers} ->
+                    Resp = [ begin
+                               {ok, HH} = aec_headers:serialize_to_map(Header),
+                               HH
+                             end || Header <- Headers ],
+                    lager:debug("Resp ~p headers = ~p", [N, pp(Resp)]),
+                    {200, [], Resp};
+                error ->
+                    {404, [], #{reason => <<"Header not found">>}}
             end
     end;
 
