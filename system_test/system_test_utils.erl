@@ -33,6 +33,8 @@
 
 -define(TEST_CTX_FIRST_LOCAL_PORT, 3001).
 
+-define(STOP_TIMEOUT, 3). % In seconds
+
 
 %=== COMMON TEST API FUNCTIONS =================================================
 
@@ -138,14 +140,36 @@ call_reply(Error, OldState) ->
 
 mgr_setup(DataDir, TempDir) ->
     TestId = uid(),
-    TestCtx = #{local_port => ?TEST_CTX_FIRST_LOCAL_PORT,
+    TestCtx = #{next_port => ?TEST_CTX_FIRST_LOCAL_PORT,
                 test_id => TestId,
                 temp_dir => TempDir,
                 data_dir => DataDir},
     {ok, #{ctx => TestCtx, nodes => #{}}}.
 
-mgr_cleanup(State) ->
-    {ok, State}.
+mgr_cleanup(State0) ->
+    #{nodes := Nodes0} = State0,
+    State1 = maps:fold(fun(Name, NodeState, State) ->
+        #{ctx := Ctx, nodes := Nodes} = State,
+        case system_test_backend:stop_node(NodeState, ?STOP_TIMEOUT, Ctx) of
+            {error, _Reason} ->
+                %% Maybe we should log something ?
+                State;
+            {ok, NodeState1, Ctx1} ->
+                State#{ctx := Ctx1, nodes := Nodes#{Name := NodeState1}}
+        end
+    end, State0, Nodes0),
+    #{nodes := Nodes1} = State1,
+    State2 = maps:fold(fun(Name, NodeState, State) ->
+        #{ctx := Ctx, nodes := Nodes} = State,
+        case system_test_backend:delete_node(NodeState, Ctx) of
+            {error, _Reason} ->
+                %% Maybe we should log something ?
+                State;
+            {ok, NodeState1, Ctx1} ->
+                State#{ctx := Ctx1, nodes := Nodes#{Name := NodeState1}}
+        end
+    end, State1, Nodes1),
+    {ok, State2}.
 
 mgr_setup_nodes(NodeSpecs, State) ->
     #{ctx := TestCtx, nodes := Nodes} = State,
@@ -166,6 +190,15 @@ mgr_setup_nodes(NodeSpecs, State) ->
         end, {Nodes, TestCtx2}, PrepNodes),
     {ok, State#{ctx := TestCtx3, nodes := Nodes2}}.
 
-mgr_start_node(_NodeName, State) ->
-    {ok, State}.
-
+mgr_start_node(NodeName, State) ->
+    #{ctx := TestCtx, nodes := Nodes} = State,
+    case maps:find(NodeName, Nodes) of
+        error -> {error, node_not_found};
+        {ok, NodeState} ->
+            case system_test_backend:start_node(NodeState, TestCtx) of
+                {error, _Reason} = Error -> Error;
+                {ok, NodeState2, TestCtx2} ->
+                    Nodes2 = Nodes#{NodeName := NodeState2},
+                    {ok, State#{ctx := TestCtx2, nodes := Nodes2}}
+            end
+    end.

@@ -11,6 +11,9 @@
 %% API exports
 -export([prepare_node/2]).
 -export([setup_node/3]).
+-export([delete_node/2]).
+-export([start_node/2]).
+-export([stop_node/3]).
 
 
 %=== MACROS ====================================================================
@@ -27,6 +30,7 @@ prepare_node(NodeSpec, TestCtx) ->
     NodeState = #{
         spec => NodeSpec,
         hostname => Hostname,
+        ext_port => 3013,
         ext_addr => ExtAddr
     },
     {ok, NodeState, TestCtx}.
@@ -34,12 +38,12 @@ prepare_node(NodeSpec, TestCtx) ->
 
 setup_node(NodeState, NodeStates, TestCtx) ->
     #{test_id := TestId,
-      local_port := Port,
+      next_port := HostPort,
       data_dir := DataDir,
       temp_dir := TempDir} = TestCtx,
-    #{spec := NodeSpec, hostname := Hostname} = NodeState,
+    #{spec := NodeSpec, hostname := Hostname, ext_port := ExtPort} = NodeState,
     #{peers := PeerNames, source := {pull, Image}} = NodeSpec,
-    MgrAddr = format("http://~s:~w/", [Hostname, Port]),
+    HostAddr = format("http://~s:~w/", [Hostname, HostPort]),
     ConfigFileName = format("epoch_~s.yaml", [Hostname]),
     ConfigFilePath = filename:join(TempDir, ConfigFileName),
     TemplateFile = filename:join(DataDir, ?CONFIG_FILE_TEMPLATE),
@@ -53,19 +57,42 @@ setup_node(NodeState, NodeStates, TestCtx) ->
         hostname => ContName,
         image => Image,
         env => #{"EPOCH_CONFIG" => ?EPOCH_CONFIG_FILE},
-        volumes => [?EPOCH_CONFIG_FILE]
+        volumes => [{ro, ConfigFilePath, ?EPOCH_CONFIG_FILE}],
+        ports => [{tcp, HostPort, ExtPort}]
     },
     case docker_utils:create_container(ContName, DockerConfig) of
+        {error, _Reason} = Error -> Error;
         {ok, Res} ->
             #{'Id' := ContId} = Res,
             NodeState2 = NodeState#{
                 container_name => ContName,
                 container_id => ContId,
-                mgr_addr => MgrAddr,
+                host_port => HostPort,
+                host_addr => HostAddr,
                 config_path => ConfigFilePath
             },
-            {ok, NodeState2, TestCtx#{local_port := Port + 1}};
-        Error -> Error
+            {ok, NodeState2, TestCtx#{next_port := HostPort + 1}}
+    end.
+
+delete_node(NodeState, TestCtx) ->
+    #{container_id := Id} = NodeState,
+    case docker_utils:delete_container(Id) of
+        {error, _Reason} = Error -> Error;
+        ok -> {ok, NodeState, TestCtx}
+    end.
+
+start_node(NodeState, TestCtx) ->
+    #{container_id := Id} = NodeState,
+    case docker_utils:start_container(Id) of
+        {error, _Reason} = Error -> Error;
+        ok -> {ok, NodeState, TestCtx}
+    end.
+
+stop_node(NodeState, Timeout, TestCtx) ->
+    #{container_id := Id} = NodeState,
+    case docker_utils:stop_container(Id, Timeout) of
+        {error, _Reason} = Error -> Error;
+        ok -> {ok, NodeState, TestCtx}
     end.
 
 
