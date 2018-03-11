@@ -130,8 +130,8 @@ fetch_mempool(Uri) ->
 schedule_ping(Uri) ->
     gen_server:cast(?MODULE, {schedule_ping, Uri}).
 
-fetch_next(Uri, HeightIn, HashIn) ->
-    gen_server:call(?MODULE, {fetch_chain, Uri, HeightIn, HashIn}).
+fetch_next(Uri, HeightIn, HashIn, Result) ->
+    gen_server:call(?MODULE, {fetch_next, Uri, HeightIn, HashIn, Result}).
 
 delete_from_pool(Uri) ->
     gen_server:cast(?MODULE, {delete_from_pool, Uri}).
@@ -199,24 +199,51 @@ handle_call({update_hash_pool, Hashes}, _From, State) ->
     HashPool = merge(length(State#state.sync_pool), State#state.hash_pool, Hashes),
     lager:debug("Hash pool grew to ~p", [HashPool]),
     {reply, ok, State#state{hash_pool = HashPool}};
-handle_call({fetch_chain, Uri, HeightIn, HashIn}, _, State) ->
-    %% Tell me what to fetch now
-    case lists:keyfind(Uri, #sync_peer.uri, State#state.sync_pool) of
-         false ->
-             %% this sync should be canceled
-             {reply, {error, sync_stopped}, State};
-         Sync when Sync#sync_peer.from >= HeightIn ->
-             {reply, {fetch, Sync#sync_peer.from, Sync#sync_peer.to, Sync#sync_peer.hash}, State};
-         Sync when Sync#sync_peer.to < HeightIn ->
-             {reply, {error, sync_stopped}, 
-              State#state{sync_pool = lists:keydelete(Uri, #sync_peer.uri, State#state.sync_pool)}};
-         #sync_peer{to = To} = Sync ->
-             {reply, {fetch, HeightIn, To, HashIn}, 
-              State#state{sync_pool = 
-                            lists:keyreplace(Uri, #sync_peer.uri, 
-                                             State#state.sync_pool, 
-                                             Sync#sync_peer{from = HeightIn, hash = HashIn})}}
+handle_call({fetch_next, Uri, HeightIn, HashIn, {ok, Block}}, _, State) ->
+    BlockH = aec_blocks:height(Block),
+    BlockHash = header_hash(Block),
+    %% If the hash of this block does not fit wanted hash, it is discarded
+    %% (In case we ask for block with hash X and we get a block with hash Y)
+    HashPool = lists:keyreplace({BlockH, BlockHash}, 1,
+                                State#state.hash_pool, {{BlockH, BlockHash}, #{block => Block}}),
+    lager:debug("fetch next from Hashpool ~p", [ [ {H, maps:is_key(block, Map)} || {{H,_}, Map} <- HashPool] ]),
+    case update_chain_from_pool(HeightIn, HashIn, HashPool) of
+        {error, Reason} ->
+           lager:error("chain update failed ~p", [Reason]),
+           {reply, {error, sync_stopped}, State#state{hash_pool = HashPool}};
+       {ok, NewHeight, NewHash, []} ->
+           lager:debug("Got all the blocks in hash pool"),
+           %% we might be done, check for more:
+           case lists:keyfind(Uri, #sync_peer.uri, State#state.sync_pool) of
+               false ->
+                   %% this sync should be canceled
+                   {reply, {error, sync_stopped}, State#state{hash_pool = []}};
+               #sync_peer{to = To} when To =< NewHeight ->
+                   {reply, done, State#state{hash_pool = [], 
+                                             sync_pool = 
+                                               lists:keydelete(Uri, #sync_peer.uri, State#state.sync_pool)}};
+               #sync_peer{to = To} ->
+                   {reply, {fill_pool, To, NewHeight, NewHash}, State#state{hash_pool = []}}
+           end;
+       {ok, NewHeight, NewHash, NewHashPool} ->
+           lager:debug("Updated Hashpool ~p", [ [ {H, maps:is_key(block, Map)} || {{H,_}, Map} <- NewHashPool] ]),
+           case [ {H, Hash} || {{H, Hash}, Map} <- NewHashPool, not maps:is_key(block, Map) ] of
+               [] ->
+                   %% The peer is behaving weird
+                   {reply, {error, sync_stopped}, 
+                    State#state{hash_pool = NewHashPool,
+                                sync_pool = 
+                                  lists:keydelete(Uri, #sync_peer.uri, State#state.sync_pool)}};
+               PickAHash ->
+                   {PickH, PickHash} = lists:nth(rand:uniform(length(PickAHash)), PickAHash),
+                   lager:debug("Get block at height ~p", [PickH]),
+                   {reply, {fetch, NewHeight, NewHash, PickHash}, State#state{hash_pool = NewHashPool}}
+           end
     end;
+handle_call({fetch_next, _Uri, _HeightIn, _HashIn, {error, Error}}, _, State) ->
+    %% Think a little;
+    %% we might have has a timeout... then retry other block.
+    {reply, {error, Error}, State};
 handle_call(_, _From, State) ->
     {reply, error, State}.
 
@@ -323,7 +350,42 @@ pick_same({{H, Hash2}, Map2}, [{{H, Hash1}, Map1} | OldHashes], NewHashes) ->
 pick_same(_, OldHashes, NewHashes) ->
   merge(OldHashes, NewHashes).
 
+update_chain_from_pool(AgreedHeight, AgreedHash, HashPool) ->
+    lager:debug("splitting at height ~p with prev hash ~p", [AgreedHeight + 1 , AgreedHash]),
+    case split_hash_pool(AgreedHeight + 1, AgreedHash, HashPool, []) of
+      {[], Rest} when Rest =/= [] ->
+         lager:error("Cannot split hash pool ~p at ~p: ~p", [Rest, AgreedHeight, AgreedHash]),
+         %% This is weird, we cannot get our next block
+        {error, {stuck_at, AgreedHeight + 1}};
+      {NewAgreedHeight, NewAgreedHash, Same, Rest} ->
+        {ok, NewAgreedHeight, NewAgreedHash, Same ++ Rest}
+    end.
 
+split_hash_pool(Height, PrevHash, [{{H, _},_} | HashPool], Same) when H < Height ->
+    split_hash_pool(Height, PrevHash, HashPool, Same);
+split_hash_pool(Height, PrevHash, [{{H, Hash}, Map} = Item | HashPool], Same) when H == Height ->
+    case maps:get(block, Map, undefined) of
+        undefined ->
+            split_hash_pool(Height, PrevHash, HashPool, [Item | Same]);
+        Block ->
+            %% We are guaranteed that hash and height of block are correct
+            Hash = header_hash(Block),
+            case aec_blocks:prev_hash(Block) of
+              PrevHash ->
+                  lager:debug("Calling post_block(~p) --> hash of header ~p", [pp(Block), Hash]),
+                  case aec_conductor:add_synced_block(Block) of
+                    ok ->
+                      split_hash_pool(H + 1, Hash, HashPool, []); 
+                    {error, _} = Error ->
+                      lager:error("Could not insert ~p", [Block]),
+                      split_hash_pool(Height, PrevHash, HashPool, Same)
+                  end;  
+              _ ->
+                split_hash_pool(Height, PrevHash, HashPool, [Item | Same])
+            end
+    end;            
+split_hash_pool(Height, PrevHash, HashPool, Same) ->
+    {Height - 1, PrevHash, Same, HashPool}.
 
 %%%=============================================================================
 %%% Jobs worker
@@ -498,21 +560,15 @@ fill_pool(Uri, RemoteHeight, AgreedHeight, AgreedHash) ->
           lager:debug("Header fetched (~p): ~p", [Uri, pp(Header)]),
           case Chunk of
               1 ->
-                 %% pool_done();
-                 fetch_more(Uri, AgreedHeight, AgreedHash);
+                 fetch_more(Uri, AgreedHeight, AgreedHash, {ok, Block});
               N when N > 1 ->
                case aeu_requests:get_n_hashes(Uri, Hash, Chunk) of
                  {ok, ChunkHashes} ->
-                    Key = {aec_headers:height(Header), Hash},
-                    HashPool = 
-                      lists:map(fun(K) when K == Key ->
-                                    {K, #{block => Block}};
-                                   (K) ->
-                                    {K, #{uri => Uri}}
-                                 end, ChunkHashes),
-                   lager:debug("We need to get following hashes: ~p", [HashPool]),
-                   update_hash_pool(HashPool),
-                   fetch_more(Uri, AgreedHeight, AgreedHash);
+                     %% Key = {aec_headers:height(Header), Hash},
+                     HashPool = [ {K, #{uri => Uri}} || K <- ChunkHashes ],
+                     lager:debug("We need to get following hashes: ~p", [HashPool]),
+                     update_hash_pool(HashPool),
+                     fetch_more(Uri, AgreedHeight, AgreedHash, {ok, Block});
                  {error, _} = Error ->
                    lager:info("Abort sync with ~p (~p) ", [Uri, Error]),
                    delete_from_pool(Uri),
@@ -524,56 +580,25 @@ fill_pool(Uri, RemoteHeight, AgreedHeight, AgreedHash) ->
           {error, Reason}
     end.
 
-fetch_chain(Uri, FromHeight, ToHeight, _) when FromHeight == ToHeight ->
-    aec_events:publish(chain_sync, {client_done, Uri});
-fetch_chain(Uri, FromH, ToH, HashFromH) when FromH < ToH ->
-    case aeu_requests:get_header_by_height(Uri, FromH + 1) of
-        {ok, Header} ->
-          lager:debug("Header fetched (~p): ~p", [Uri, pp(Header)]),
-          case aec_headers:prev_hash(Header) == HashFromH of
-            true ->
-              {ok, HeaderHash} = aec_headers:hash_header(Header),
-              fetch_chain_from_header(Uri, FromH + 1, HeaderHash); 
-            false ->
-              lager:info("Abort sync due to non-fitting header ~p =/= ", [Header]),
-              delete_from_pool(Uri),
-              {error, sync_abort}
-          end;
-      {error, Reason} ->
-          delete_from_pool(Uri),
-          {error, Reason}
-    end.
-
-fetch_chain_from_header(Uri, Height, HeaderHash) ->
-  case do_fetch_block(HeaderHash, Uri) of
-    {ok, true, Block} ->
-      lager:debug("Calling post_block(~p) --> hash of header ~p", [pp(Block), HeaderHash]),
-      case aec_conductor:add_synced_block(Block) of
-        ok ->
-          fetch_more(Uri, Height, HeaderHash);
-        {error, _} = Error ->
-          delete_from_pool(Uri),
-          Error
-      end;
-    {ok, false, _} ->
-      %% More than one sync in progress, the block is already there
-      fetch_more(Uri, Height, HeaderHash);
-    {error, _} = Error ->
-      lager:info("Abort sync due to non-fitting block ~p =/= ", [HeaderHash]),
-      delete_from_pool(Uri),
-      Error
-  end.
-
-fetch_more(Uri, LastHeight, HeaderHash) ->
-  %% We need to supply the Hash, because locally we might have a shorter, 
-  %% but locally more difficult fork
-  case fetch_next(Uri, LastHeight, HeaderHash) of
-    {fetch, NewFrom, NewTo, Hash} -> 
-      fetch_chain(Uri, NewFrom, NewTo, Hash);
-    Error ->
-      lager:info("Abort sync at height ~p Error ~p ", [LastHeight, Error]),
-      delete_from_pool(Uri),
-      Error
+fetch_more(Uri, LastHeight, HeaderHash, Result) ->
+    %% We need to supply the Hash, because locally we might have a shorter, 
+    %% but locally more difficult fork
+    case fetch_next(Uri, LastHeight, HeaderHash, Result) of
+        {fetch, NewHeight, NewHash, Hash} ->
+            case do_fetch_block(Hash, Uri) of
+                {ok, _, NewBlock} ->
+                    fetch_more(Uri, NewHeight, NewHash, {ok, NewBlock});
+                {error, _} = Error ->
+                    fetch_more(Uri, NewHeight, NewHash, Error)
+            end;
+        done ->
+            aec_events:publish(chain_sync, {client_done, Uri});
+        {fill_pool, To, AgreedHeight, AgreedHash} ->
+            fill_pool(Uri, To, AgreedHeight, AgreedHash);
+        Error ->
+            lager:info("Abort sync at height ~p Error ~p ", [LastHeight, Error]),
+            delete_from_pool(Uri),
+            Error
   end.
 
 fetch_block(Hash, Uri) ->
