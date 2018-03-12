@@ -560,6 +560,8 @@ fill_pool(Uri, RemoteHeight, AgreedHeight, AgreedHash) ->
           lager:debug("Header fetched (~p): ~p", [Uri, pp(Header)]),
           case Chunk of
               1 ->
+                 update_hash_pool([ {{aec_headers:height(Header), Hash}, 
+                                     #{block => Block, uri => Uri}}]),
                  fetch_more(Uri, AgreedHeight, AgreedHash, {ok, Block});
               N when N > 1 ->
                case aeu_requests:get_n_hashes(Uri, Hash, Chunk) of
