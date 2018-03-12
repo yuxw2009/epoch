@@ -37,7 +37,7 @@
 -export([ping/2,
          top/1,
          get_header_by_hash/2,
-         get_header_by_height/2,
+         get_header_by_height/2,  %% remove this
          get_n_hashes/3,
          get_block_by_height/2,
          get_block/2,
